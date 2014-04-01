@@ -1,9 +1,11 @@
 #include <math.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include <gst/gst.h>
 
 #include "plugin.h"
+#include "core.h"
 
 GST_DEBUG_CATEGORY_STATIC(gst_webcam_filter_debug);
 #define GST_CAT_DEFAULT gst_webcam_filter_debug
@@ -33,51 +35,11 @@ G_DEFINE_TYPE(GstWebcamFilter, gst_webcam_filter, GST_TYPE_VIDEO_FILTER);
 
 // GObject vmethod implementations
 
-enum {
-	HALF_WINDOW = 1,
-};
-
-inline static int min(int a, int b) {
-	return a < b ? a : b;
-}
-
-inline static int max(int a, int b) {
-	return a > b ? a : b;
-}
-
-#define FOR_WINDOW(i2, j2, i, j, h, w) \
-	for (i2 = max(0, i - HALF_WINDOW); min(h, i2 < i + HALF_WINDOW); i2++) \
-		for (j2 = max(0, j - HALF_WINDOW); min(w, j2 < j + HALF_WINDOW); j2++)
-
-inline static double norm(guint32 v) {
-	double r = v & 0xff, g = (v >> 8) & 0xff, b = (v >> 16) & 0xff;
-	return sqrt(r * r + g * g + b * b);
-}
-
-#define in(i, j) indata[i*w + j]
-#define out(i, j) outdata[i*w + j]
 static GstFlowReturn transform(GstVideoFilter *filter,
 		GstVideoFrame *inframe, GstVideoFrame *outframe) {
-	guint32 *indata = (guint32*) inframe->data[0];
-	guint32 *outdata = (guint32*) outframe->data[0];
-
-	int i, i2, i3, j, j2, j3,
-		w = inframe->info.width, h = inframe->info.height;
-	for (i = 0; i < h; i++) {
-		for (j = 0; j < w; j++) {
-			double dmin = INFINITY;
-			FOR_WINDOW(i2, j2, i, j, h, w) {
-				double d = 0;
-				FOR_WINDOW(i3, j3, i, j, h, w) {
-					d += norm(in(i2, j2) - in(i3, j3));
-				}
-				if (dmin > d) {
-					dmin = d;
-					out(i, j) = in(i2, j2);
-				}
-			}
-		}
-	}
+	denoise((const uint32_t*) inframe->data[0],
+			(uint32_t*) outframe->data[0],
+			inframe->info.width, inframe->info.height);
 
 	return GST_FLOW_OK;
 }
