@@ -1,0 +1,3 @@
+This is my bachelor's thesis project, a GPGPU-based webcam video filter.
+
+The documentation (aka dissertation) will be put up later...
