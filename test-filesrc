@@ -1,0 +1,3 @@
+#!/bin/sh
+file=${1:-./webcam.avi}
+gst-launch-1.0 --gst-plugin-path=. filesrc location="$file" ! decodebin ! autovideoconvert ! webcamfilter ! autovideoconvert ! xvimagesink

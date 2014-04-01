@@ -1,0 +1,2 @@
+#!/bin/sh
+gst-launch-1.0 --gst-plugin-path=. v4l2src ! videoflip method=4 ! autovideoconvert ! webcamfilter ! autovideoconvert ! xvimagesink
