@@ -4,7 +4,7 @@ LDFLAGS := $(shell pkg-config --libs gstreamer-1.0)
 
 SO_LDFLAGS := $(shell pkg-config --libs gstreamer-video-1.0) -lm
 
-all: main libgstwebcamfilter.so
+all: main plugin.so
 
-libgstwebcamfilter.so: plugin.c
+plugin.so: plugin.c
 	$(CC) $(CFLAGS) $(SO_LDFLAGS) -shared -fPIC -DPIC -o $@ $<
