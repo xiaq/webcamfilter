@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
 	gst_object_unref(bus);
 
 	// Set up source and sink
-	GstElement *source, *sink;
+	GstElement *source, *preconv, *filter, *postconv, *sink;
 
 	if (S_ISCHR(input_stat.st_mode)) {
 		// Assume V4L2 device
@@ -144,10 +144,14 @@ int main(int argc, char **argv) {
 					gst_element_get_static_pad(queue, "src")));
 	}
 
+	preconv = make_element("autovideoconvert", "pre-filter-convert");
+	filter = make_element("webcamfilter", "filter");
+	postconv = make_element("autovideoconvert", "post-filter-convert");
 	sink = make_element("xvimagesink", "video-output");
 
-	gst_bin_add_many(GST_BIN(pipeline), source, sink, NULL);
-	gst_element_link(source, sink);
+	gst_bin_add_many(GST_BIN(pipeline),
+			source, preconv, filter, postconv, sink, NULL);
+	gst_element_link_many(source, preconv, filter, postconv, sink, NULL);
 
 	// Start rolling
 	g_print("Playing...\n");
