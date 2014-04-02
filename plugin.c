@@ -39,7 +39,7 @@ static GstFlowReturn transform(GstVideoFilter *filter,
 		GstVideoFrame *inframe, GstVideoFrame *outframe) {
 	denoise((const uint32_t*) inframe->data[0],
 			(uint32_t*) outframe->data[0],
-			inframe->info.width, inframe->info.height);
+			inframe->info.height, inframe->info.width);
 
 	return GST_FLOW_OK;
 }
