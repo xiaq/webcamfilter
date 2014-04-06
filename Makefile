@@ -6,8 +6,8 @@ SO_LDFLAGS := $(shell pkg-config --libs gstreamer-video-1.0) -lm -L/opt/cuda/lib
 
 all: main plugin.so
 
-plugin.so: plugin.c core.o
+plugin.so: plugin.c kernel.o
 	$(CC) $(CFLAGS) $(SO_LDFLAGS) -shared -fPIC -DPIC -o $@ $+
 
-core.o: core.cu
+kernel.o: kernel.cu
 	$(NVCC) -Xcompiler -fPIC -DPIC -c -arch=sm_20 -o $@ $<

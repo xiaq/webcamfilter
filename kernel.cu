@@ -1,7 +1,7 @@
 #include <stdint.h>
 
 extern "C" {
-#include "core.h"
+#include "kernel.h"
 }
 
 enum {

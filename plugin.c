@@ -5,7 +5,7 @@
 #include <gst/gst.h>
 
 #include "plugin.h"
-#include "core.h"
+#include "kernel.h"
 
 GST_DEBUG_CATEGORY_STATIC(gst_webcam_filter_debug);
 #define GST_CAT_DEFAULT gst_webcam_filter_debug
