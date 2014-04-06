@@ -26,6 +26,9 @@ __global__ void denoise_kernel(const uint32_t *in, uint32_t *out, int h,
 	int k = blockDim.x * blockIdx.x + threadIdx.x;
 	int lower = k * perthread;
 	int upper = (k + 1) * perthread;
+	if (k == 256 * 32 - 1) {
+		upper = h * w;
+	}
 	for (k = lower; k < upper; k++) {
 		int i = k / w, j = k % w;
 		double dmin = INFINITY;
