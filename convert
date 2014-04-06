@@ -1,0 +1,6 @@
+#!/bin/sh
+file=${1:-./webcam.avi}
+gst-launch-1.0 --gst-plugin-path=. filesrc location="$file" ! decodebin \
+	! videoconvert ! video/x-raw,format=RGBx ! webcamfilter \
+	! videoconvert ! video/x-raw,format=YUY2 \
+	! avimux ! filesink location=./out.avi

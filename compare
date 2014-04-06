@@ -1,0 +1,16 @@
+#!/bin/sh
+if test $# != 2; then
+	exit 1
+fi
+width=640
+dimension="width=$width,height=360"
+gst-launch-1.0 --gst-debug=2 \
+	filesrc location="$1" ! decodebin ! videoscale ! videoconvert \
+	! video/x-raw,format=AYUV,$dimension \
+	! videobox border-alpha=0 right=-$width \
+	! videomixer name=mix ! videoconvert ! video/x-raw,format=YUY2 \
+	! autovideosink \
+	filesrc location="$2" ! decodebin ! videoscale ! videoconvert \
+	! video/x-raw,format=AYUV,$dimension \
+	! videobox border-alpha=0 left=-$width \
+	! mix.

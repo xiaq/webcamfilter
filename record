@@ -1,0 +1,2 @@
+#!/bin/sh
+gst-launch-1.0 -e v4l2src ! avimux ! filesink location=./webcam.avi

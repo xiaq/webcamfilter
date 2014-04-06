@@ -1,0 +1,17 @@
+#!/bin/sh
+dir=`mktemp -d`
+i=0
+fifos=
+
+for f in "$@"; do
+	fifo="$dir/$i"
+	fifos="$fifos $fifo"
+	mkfifo "$fifo"
+	i=`expr $i + 1`
+	mplayer "$f" -use-filename-title \
+		-slave -input file="$fifo" -quiet -loop 0 \
+		>/dev/null &
+done
+
+tee $fifos > /dev/null
+rm -r "$dir"
