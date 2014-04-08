@@ -1,2 +1,4 @@
 #!/bin/sh
-gst-launch-1.0 -e v4l2src ! avimux ! filesink location=./webcam.avi
+gst-launch-1.0 -e v4l2src ! tee name=t \
+	! queue ! avimux ! filesink location=./webcam.avi \
+	t. ! videoflip method=4 ! ximagesink
