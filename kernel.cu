@@ -27,12 +27,12 @@ __device__ inline static double distance(int32_t u, int32_t v) {
 	for (i2 = max(0, i - HALF_WINDOW); min(h, i2 < i + HALF_WINDOW); i2++) \
 		for (j2 = max(0, j - HALF_WINDOW); min(w, j2 < j + HALF_WINDOW); j2++)
 
-__global__ void denoise_kernel_spatial(
+__global__ void denoiseKernelSpatial(
 		const uint32_t *in, uint32_t *out, int h,
-		int w, int perthread) {
+		int w, int perThread) {
 	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perthread;
-	int upper = (k + 1) * perthread;
+	int lower = k * perThread;
+	int upper = (k + 1) * perThread;
 	if (k == 256 * 32 - 1) {
 		upper = h * w;
 	}
@@ -57,10 +57,10 @@ __global__ void denoise_kernel_spatial(
 
 __global__ void denoise_kernel_temporal_vmf(
 		KernelContext *ctx, int nbacklogs, uint32_t *out,
-		int h, int w, int perthread) {
+		int h, int w, int perThread) {
 	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perthread;
-	int upper = (k + 1) * perthread;
+	int lower = k * perThread;
+	int upper = (k + 1) * perThread;
 	if (k == 256 * 32 - 1) {
 		upper = h * w;
 	}
@@ -88,12 +88,12 @@ enum {
 	DSUM_THRESHOLD = 400,
 };
 
-__global__ void denoise_kernel_temporal_avg(
+__global__ void denoiseKernelTemporalAvg(
 		KernelContext *ctx, uint32_t *out,
-		int h, int w, int perthread) {
+		int h, int w, int perThread) {
 	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perthread;
-	int upper = (k + 1) * perthread;
+	int lower = k * perThread;
+	int upper = (k + 1) * perThread;
 	if (k == 256 * 32 - 1) {
 		upper = h * w;
 	}
@@ -117,12 +117,12 @@ __global__ void denoise_kernel_temporal_avg(
 	}
 }
 
-__global__ void denoise_kernel_adaptive_temporal_avg(
+__global__ void denoiseKernelAdaptiveTemporalAvg(
 		KernelContext *ctx, uint32_t *out,
-		int h, int w, int perthread) {
+		int h, int w, int perThread) {
 	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perthread;
-	int upper = (k + 1) * perthread;
+	int lower = k * perThread;
+	int upper = (k + 1) * perThread;
 	if (k == 256 * 32 - 1) {
 		upper = h * w;
 	}
@@ -155,9 +155,9 @@ __global__ void denoise_kernel_adaptive_temporal_avg(
 
 void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	KernelContext *ctx = (KernelContext*) p;
-	int threads_per_block = 256;
-	int blocks_per_grid = 32;
-	int perthread = h * w / (threads_per_block * blocks_per_grid);
+	int threadsPerBlock = 256;
+	int blocksPerGrid = 32;
+	int perThread = h * w / (threadsPerBlock * blocksPerGrid);
 
 	int size = h * w * sizeof(uint32_t);
 	uint32_t *dout;
@@ -168,8 +168,8 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		uint32_t *din;
 		cudaMalloc(&din, size);
 		cudaMemcpy(din, in, size, cudaMemcpyHostToDevice);
-		denoise_kernel_spatial<<<blocks_per_grid, threads_per_block>>>(
-				din, dout, h, w, perthread);
+		denoiseKernelSpatial<<<blocksPerGrid, threadsPerBlock>>>(
+				din, dout, h, w, perThread);
 		cudaFree(din);
 		break;
 	case TEMPORAL_AVG:
@@ -189,12 +189,12 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		cudaMemcpy(dctx, ctx, sizeof(KernelContext), cudaMemcpyHostToDevice);
 		switch (m) {
 		case TEMPORAL_AVG:
-			denoise_kernel_temporal_avg<<<blocks_per_grid,
-				threads_per_block>>>(dctx, dout, h, w, perthread);
+			denoiseKernelTemporalAvg<<<blocksPerGrid,
+				threadsPerBlock>>>(dctx, dout, h, w, perThread);
 			break;
 		case ADAPTIVE_TEMPORAL_AVG:
-			denoise_kernel_adaptive_temporal_avg<<<blocks_per_grid,
-				threads_per_block>>>(dctx, dout, h, w, perthread);
+			denoiseKernelAdaptiveTemporalAvg<<<blocksPerGrid,
+				threadsPerBlock>>>(dctx, dout, h, w, perThread);
 			break;
 		}
 		cudaFree(dctx);
