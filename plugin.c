@@ -37,14 +37,28 @@ G_DEFINE_TYPE(GstWebcamFilter, gst_webcam_filter, GST_TYPE_VIDEO_FILTER);
 
 static GstFlowReturn transform(GstVideoFilter *filter,
 		GstVideoFrame *inframe, GstVideoFrame *outframe) {
-	denoise((const uint32_t*) inframe->data[0],
+	GstWebcamFilter *wfilter = (GstWebcamFilter*) filter;
+	denoise(wfilter->ctx, TEMPORAL_AVG,
+			(const uint32_t*) inframe->data[0],
 			(uint32_t*) outframe->data[0],
 			inframe->info.height, inframe->info.width);
 
 	return GST_FLOW_OK;
 }
 
+static void gst_webcam_filter_init(GstWebcamFilter *filter) {
+	filter->ctx = kernelInit();
+}
+
+static void gst_webcam_filter_finalize(GObject *obj) {
+	GstWebcamFilter *filter = (GstWebcamFilter*) obj;
+	kernelFinalize(filter->ctx);
+}
+
 static void gst_webcam_filter_class_init(GstWebcamFilterClass *klass) {
+	GObjectClass *go_class = (GObjectClass*) klass;
+	go_class->finalize = gst_webcam_filter_finalize;
+
 	GstElementClass *ge_class = (GstElementClass*) klass;
 	gst_element_class_set_details_simple(ge_class,
 			"WebcamFilter",
@@ -67,9 +81,6 @@ static void gst_webcam_filter_class_init(GstWebcamFilterClass *klass) {
 	GstVideoFilterClass *vf_class = (GstVideoFilterClass*) klass;
 	// vf_class->set_info = GST_DEBUG_FUNCPTR(gst_webcam_filter_set_info);
 	vf_class->transform_frame = GST_DEBUG_FUNCPTR(transform);
-}
-
-static void gst_webcam_filter_init(GstWebcamFilter *filter) {
 }
 
 static gboolean plugin_init(GstPlugin *plugin) {

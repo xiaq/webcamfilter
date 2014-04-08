@@ -18,6 +18,7 @@ G_BEGIN_DECLS
 
 typedef struct {
 	GstVideoFilter parent;
+	void *ctx;
 } GstWebcamFilter;
 
 typedef struct {
