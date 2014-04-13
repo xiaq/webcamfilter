@@ -83,11 +83,6 @@ __global__ void denoise_kernel_temporal_vmf(
 	}
 }
 
-enum {
-	D0_THRESHOLD = 200,
-	DSUM_THRESHOLD = 400,
-};
-
 __global__ void denoiseKernelTemporalAvg(
 		KernelContext *ctx, uint32_t *out,
 		int h, int w, int perThread) {
@@ -105,7 +100,6 @@ __global__ void denoiseKernelTemporalAvg(
 			r += v & 0xff;
 			g += (v >> 8) & 0xff;
 			b += (v >> 16) & 0xff;
-			// lastv = v;
 		}
 		r /= i;
 		g /= i;
@@ -117,8 +111,13 @@ __global__ void denoiseKernelTemporalAvg(
 	}
 }
 
+enum {
+	D0_THRESHOLD = 100,
+	DSUM_THRESHOLD = 250,
+};
+
 __global__ void denoiseKernelAdaptiveTemporalAvg(
-		KernelContext *ctx, uint32_t *out,
+		KernelContext *ctx, int nbacklogs, uint32_t *out,
 		int h, int w, int perThread) {
 	int k = blockDim.x * blockIdx.x + threadIdx.x;
 	int lower = k * perThread;
@@ -128,13 +127,14 @@ __global__ void denoiseKernelAdaptiveTemporalAvg(
 	}
 	uint32_t **backlogs = ctx->backlogs;
 	for (k = lower; k < upper; k++) {
-		int i, r = 0, g = 0, b = 0;
-		uint32_t v0 = backlogs[0][k], lastv = backlogs[0][k];
+		int c = nbacklogs / 2, i, j, r = 0, g = 0, b = 0;
 		int dsum = 0;
-		for (i = 0; i < BACKLOG_SIZE && backlogs[i]; i++) {
+		uint32_t vc = backlogs[c][k];
+		/*
+		for (i = c; i >= 0; i--) {
 			uint32_t v = backlogs[i][k];
 			dsum += distance(v, lastv);
-			if (distance(v0, v) > D0_THRESHOLD || dsum > DSUM_THRESHOLD) {
+			if (distance(vc, v) > D0_THRESHOLD || dsum > DSUM_THRESHOLD) {
 				break;
 			}
 			r += v & 0xff;
@@ -142,13 +142,46 @@ __global__ void denoiseKernelAdaptiveTemporalAvg(
 			b += (v >> 16) & 0xff;
 			lastv = v;
 		}
-		// r = g = b = 0xff * (i-1) / (BACKLOG_SIZE-1);
-		r /= i;
-		g /= i;
-		b /= i;
+		j = i;
+		lastv = vc;
+		for (i = c + 1; i < BACKLOG_SIZE && backlogs[i]; i++) {
+			uint32_t v = backlogs[i][k];
+			dsum += distance(v, lastv);
+			if (distance(vc, v) > D0_THRESHOLD || dsum > DSUM_THRESHOLD) {
+				break;
+			}
+			r += v & 0xff;
+			g += (v >> 8) & 0xff;
+			b += (v >> 16) & 0xff;
+			lastv = v;
+		}
+		*/
+		uint32_t vi_last = vc, vj_last = vc;
+		for (i = j = c; i < nbacklogs && j >= 0; i++, j--) {
+			uint32_t vi = backlogs[i][k], vj = backlogs[j][k];
+			dsum += distance(vi, vi_last) + distance(vj, vj_last);
+			if (distance(vc, vi) > D0_THRESHOLD ||
+				distance(vc, vj) > D0_THRESHOLD ||
+				dsum > DSUM_THRESHOLD) {
+				break;
+			}
+			r += vi & 0xff;
+			g += (vi >> 8) & 0xff;
+			b += (vi >> 16) & 0xff;
+			r += vj & 0xff;
+			g += (vj >> 8) & 0xff;
+			b += (vj >> 16) & 0xff;
+			vi_last = vi;
+			vj_last = vj;
+		}
+		r /= i - j;
+		g /= i - j;
+		b /= i - j;
 		r &= 0xff;
 		g &= 0xff;
 		b &= 0xff;
+
+		// r = g = b = 0xff * (i - j) / nbacklogs;
 		out[k] = r | (g << 8) | (b << 16);
 	}
 }
@@ -193,8 +226,11 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 				threadsPerBlock>>>(dctx, dout, h, w, perThread);
 			break;
 		case ADAPTIVE_TEMPORAL_AVG:
+			int i;
+			for (i = 0; i < BACKLOG_SIZE && ctx->backlogs[i]; i++)
+				;
 			denoiseKernelAdaptiveTemporalAvg<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, dout, h, w, perThread);
+				threadsPerBlock>>>(dctx, i, dout, h, w, perThread);
 			break;
 		}
 		cudaFree(dctx);
