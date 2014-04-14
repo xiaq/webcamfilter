@@ -158,6 +158,25 @@ __global__ void denoiseKernelAdaptiveTemporalAvg(
 	}
 }
 
+__global__ void denoiseKernelZlokolica(
+		KernelContext *ctx, uint32_t *out,
+		int h, int w, int perThread) {
+	int k = blockDim.x * blockIdx.x + threadIdx.x;
+	int lower = k * perThread;
+	int upper = (k + 1) * perThread;
+	if (k == 256 * 32 - 1) {
+		upper = h * w;
+	}
+	uint32_t **backlogs = ctx->backlogs;
+	for (k = lower; k < upper; k++) {
+	}
+}
+
+__global__ void denoiseKernelKNN(
+		KernelContext *ctx, uint32_t *out,
+		int h, int w, int perThread) {
+}
+
 void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	KernelContext *ctx = (KernelContext*) p;
 	int threadsPerBlock = 256;
@@ -195,6 +214,14 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		switch (m) {
 		case TEMPORAL_AVG:
 			denoiseKernelTemporalAvg<<<blocksPerGrid,
+				threadsPerBlock>>>(dctx, dout, h, w, perThread);
+			break;
+		case KNN:
+			denoiseKernelKNN<<<blocksPerGrid,
+				threadsPerBlock>>>(dctx, dout, h, w, perThread);
+			break;
+		case ZLOKOLICA:
+			denoiseKernelZlokolica<<<blocksPerGrid,
 				threadsPerBlock>>>(dctx, dout, h, w, perThread);
 			break;
 		case ADAPTIVE_TEMPORAL_AVG:

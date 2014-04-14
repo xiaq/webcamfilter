@@ -5,5 +5,7 @@ extern void kernelFinalize(void*);
 enum {
 	SPATIAL,
 	TEMPORAL_AVG,
+	KNN,
+	ZLOKOLICA,
 	ADAPTIVE_TEMPORAL_AVG,
 };
