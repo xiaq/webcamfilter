@@ -55,34 +55,6 @@ __global__ void denoiseKernelSpatial(
 #undef in
 #undef out
 
-__global__ void denoise_kernel_temporal_vmf(
-		KernelContext *ctx, int nbacklogs, uint32_t *out,
-		int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	uint32_t **backlogs = ctx->backlogs;
-	for (k = lower; k < upper; k++) {
-		double dmin = INFINITY;
-		int i, j;
-		for (i = 0; i < nbacklogs; i++) {
-			double d = 0;
-			for (j = 0; j < nbacklogs; j++) {
-				if (i != j) {
-					d += distance(backlogs[i][k], backlogs[j][k]);
-				}
-			}
-			if (dmin > d) {
-				dmin = d;
-				out[k] = backlogs[i][k];
-			}
-		}
-	}
-}
-
 __global__ void denoiseKernelTemporalAvg(
 		KernelContext *ctx, uint32_t *out,
 		int h, int w, int perThread) {
