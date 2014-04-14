@@ -15,9 +15,9 @@ typedef struct {
 } KernelContext;
 
 __device__ inline static double distance(int32_t u, int32_t v) {
-	int r = u & 0xff - v & 0xff,
-		g = (u >> 8) & 0xff - (v >> 8) & 0xff,
-		b = (u >> 16) & 0xff - (v >> 16) & 0xff;
+	int r = (u & 0xff) - (v & 0xff),
+		g = ((u >> 8) & 0xff) - ((v >> 8) & 0xff),
+		b = ((u >> 16) & 0xff) - ((v >> 16) & 0xff);
 	return sqrt(double(r * r + g * g + b * b));
 }
 
