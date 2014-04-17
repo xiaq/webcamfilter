@@ -179,8 +179,6 @@ __global__ void denoiseKernelZlokolica(
 	}
 }
 
-__device__ bool said = false;
-
 __global__ void denoiseKernelKNN(
 		KernelContext *ctx, int nbacklogs, uint32_t *out,
 		int h, int w, int perThread) {
