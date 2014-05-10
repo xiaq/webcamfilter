@@ -10,7 +10,7 @@ for f in "$@"; do
 	i=`expr $i + 1`
 	mplayer "$f" -use-filename-title \
 		-slave -input file="$fifo" -quiet -loop 0 \
-		>/dev/null &
+		$MPLAYER_ARGS >/dev/null &
 done
 
 tee $fifos > /dev/null
