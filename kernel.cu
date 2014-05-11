@@ -14,6 +14,11 @@ enum {
 	KNN_FRAMES = 5,
 };
 
+enum {
+	Z_THRM = 10 * 0x10000,
+	Z_THRD = 10,
+};
+
 typedef struct {
 	uint32_t v;
 	double d;
@@ -22,7 +27,10 @@ typedef struct {
 typedef struct {
 	uint32_t *backlogs[BACKLOG_SIZE+1];
 	uint32_t *diffs[NDIFFS+1];
+	bool *motions[NDIFFS+1];
+
 	uint32_t **dbacklogs, **ddiffs;
+	bool **dmotions;
 } KernelContext;
 
 __device__ inline static double distance(int32_t u, int32_t v) {
@@ -32,17 +40,20 @@ __device__ inline static double distance(int32_t u, int32_t v) {
 	return sqrt(double(r * r + g * g + b * b));
 }
 
-__device__ uint32_t diff(uint32_t u, uint32_t v) {
-	double d = distance(u, v);
-	return d * 0x10000;
-}
-
 __device__ uint32_t lum(uint32_t u) {
 	int r = u & 0xff,
 		g = (u >> 8) & 0xff,
 		b = (u >> 16) & 0xff;
 	int l = 0.299 * r + 0.587 * g + 0.114 * b;
 	return l > 0xff ? 0xff : l;
+}
+
+__device__ uint32_t diff(uint32_t u, uint32_t v) {
+	/*
+	double d = distance(u, v);
+	*/
+	int d = abs(int(lum(u)) - int(lum(v)));
+	return d * 0x10000;
 }
 
 __device__ uint32_t diffPixel(uint32_t u, uint32_t v) {
@@ -100,6 +111,30 @@ __global__ static void updateDiff(
 #define FOR_WINDOW(i2, j2, i, j, h, w, wd) \
 	for (i2 = max(0, i - wd); min(h, i2 < i + wd); i2++) \
 		for (j2 = max(0, j - wd); min(w, j2 < j + wd); j2++)
+
+__global__ static void updateMotion(
+		bool *m, uint32_t *d, int h, int w) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = i * w + j;
+
+	if (d[k] < Z_THRM) {
+		m[k] = false;
+	}
+
+	int i2, j2;
+	int excess = 0;
+	FOR_WINDOW(i2, j2, i, j, h, w, 1) {
+		int k2 = i2 * w + j2;
+		if (k2 != k && d[k2] >= Z_THRM) {
+			excess++;
+			if (excess == 2) {
+				m[k] = true;
+				return;
+			}
+		}
+	}
+}
 
 __global__ void denoiseKernelSpatial(
 		const uint32_t *in, uint32_t *out, int h, int w) {
@@ -245,42 +280,28 @@ __global__ void denoiseKernelAdaptiveTemporalAvg(
 	out[k] = r | (g << 8) | (b << 16);
 }
 
-enum {
-	Z_THRM = 20 * 0x10000,
-	Z_THRD = 10,
-};
-
 __global__ void denoiseKernelMotion(
-		uint32_t **diffs, uint32_t *out, int h, int w) {
+		bool **motions, uint32_t *out, int h, int w) {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int j = blockDim.y * blockIdx.y + threadIdx.y;
 	int k = i * w + j;
 
-	int i2, j2;
+	/*
 	int t;
 	// Motion detection
-	for (t = 0; t < NDIFFS && diffs[t]; t++) {
-		if (diffs[t][k] < Z_THRM) {
-			continue;
-		}
-		int excess = 0;
-		FOR_WINDOW(i2, j2, i, j, h, w, 1) {
-			int k2 = i2 * w + j2;
-			if (k2 != k && diffs[t][k2] >= Z_THRM) {
-				excess++;
-				if (excess == 2) {
-					goto after_md;
-				}
-			}
-		}
-	}
-after_md:
+	for (t = 0; t < NDIFFS && motions[t] && !motions[t][k]; t++)
+		;
 	int v = 0xff * (NDIFFS - t) / NDIFFS;
+	*/
+	int v = 0;
+	if (motions[0] && motions[0][k]) {
+		v = 0xff;
+	}
 	out[k] = v | (v << 8) | (v << 16);
 }
 
 __global__ void denoiseKernelAKNN(
-		uint32_t **backlogs, uint32_t **diffs, int nbacklogs, uint32_t *out,
+		uint32_t **backlogs, bool **motions, int nbacklogs, uint32_t *out,
 		int h, int w) {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int j = blockDim.y * blockIdx.y + threadIdx.y;
@@ -293,25 +314,10 @@ __global__ void denoiseKernelAKNN(
 		return;
 	}
 
-	int i2, j2;
 	int nf;
 	// Motion detection
-	for (nf = 0; nf < NDIFFS && diffs[nf]; nf++) {
-		if (diffs[nf][k] < Z_THRM) {
-			continue;
-		}
-		int excess = 0;
-		FOR_WINDOW(i2, j2, i, j, h, w, 1) {
-			int k2 = i2 * w + j2;
-			if (k2 != k && diffs[nf][k2] >= Z_THRM) {
-				excess++;
-				if (excess == 2) {
-					goto after_md;
-				}
-			}
-		}
-	}
-after_md:
+	for (nf = 0; nf < NDIFFS && motions[nf] && !motions[nf][k]; nf++)
+		;
 	if (nf < nbacklogs-1) {
 		nf++;
 	}
@@ -330,6 +336,7 @@ after_md:
 	knnElem elems[KNN_NELEMS+1];
 	int nelems = 0;
 	int t, e;
+	int i2, j2;
 	FOR_WINDOW(i2, j2, i, j, h, w, 1) {
 		for (t = 0; t < nf; t++) {
 			uint32_t v = backlogs[t][i2*w+j2];
@@ -435,6 +442,16 @@ __global__ void denoiseKernelKNN(
 	out[k] = r | (g << 8) | (b << 16);
 }
 
+// Do a cyclic shift on array elements. The array must have at least (n+1)
+// slots.
+template <class T>
+void ror(T *a, int n) {
+	for (int i = n; i > 0; i--) {
+		a[i] = a[i-1];
+	}
+	a[0] = a[n];
+}
+
 void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	static int frame = 0;
 	KernelContext *ctx = (KernelContext*) p;
@@ -470,11 +487,7 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	case KNN:
 	case AKNN:
 	case MOTION:
-		// Cyclically right shift backlog
-		for (int i = BACKLOG_SIZE; i > 0; i--) {
-			ctx->backlogs[i] = ctx->backlogs[i-1];
-		}
-		ctx->backlogs[0] = ctx->backlogs[BACKLOG_SIZE];
+		ror(ctx->backlogs, BACKLOG_SIZE);
 		if (ctx->backlogs[0] == 0) {
 			cudaMalloc(&ctx->backlogs[0], size);
 		}
@@ -483,18 +496,26 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		switch (m) {
 		case AKNN:
 		case MOTION:
-			for (int i = NDIFFS; i > 0; i--) {
-				ctx->diffs[i] = ctx->diffs[i-1];
-			}
-			ctx->diffs[0] = ctx->diffs[NDIFFS];
+			ror(ctx->diffs, NDIFFS);
 			if (ctx->diffs[0] == 0) {
 				cudaMalloc(&ctx->diffs[0], size);
 			}
+			updateDiff<<<blocksPerGrid, threadsPerBlock>>>(
+					ctx->diffs[0], ctx->backlogs[0], ctx->backlogs[1], w);
+			ror(ctx->motions, NDIFFS);
+			if (ctx->motions[0] == 0) {
+				cudaMalloc(&ctx->motions[0],
+						size / sizeof(uint32_t) * sizeof(bool));
+			}
+			updateMotion<<<blocksPerGrid, threadsPerBlock>>>(
+					ctx->motions[0], ctx->diffs[0], h, w);
 		}
 
 		cudaMemcpy(ctx->dbacklogs, ctx->backlogs, sizeof(ctx->backlogs),
 				cudaMemcpyHostToDevice);
 		cudaMemcpy(ctx->ddiffs, ctx->diffs, sizeof(ctx->diffs),
+				cudaMemcpyHostToDevice);
+		cudaMemcpy(ctx->dmotions, ctx->motions, sizeof(ctx->motions),
 				cudaMemcpyHostToDevice);
 
 		int i;
@@ -515,16 +536,12 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 				threadsPerBlock>>>(ctx->dbacklogs, i, dout, h, w);
 			break;
 		case AKNN:
-			updateDiff<<<blocksPerGrid, threadsPerBlock>>>(
-					ctx->diffs[0], ctx->backlogs[0], ctx->backlogs[1], w);
 			denoiseKernelAKNN<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->dbacklogs, ctx->ddiffs, i, dout, h, w);
+				threadsPerBlock>>>(ctx->dbacklogs, ctx->dmotions, i, dout, h, w);
 			break;
 		case MOTION:
-			updateDiff<<<blocksPerGrid, threadsPerBlock>>>(
-					ctx->diffs[0], ctx->backlogs[0], ctx->backlogs[1], w);
 			denoiseKernelMotion<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->ddiffs, dout, h, w);
+				threadsPerBlock>>>(ctx->dmotions, dout, h, w);
 			break;
 		case ADAPTIVE_TEMPORAL_AVG:
 			denoiseKernelAdaptiveTemporalAvg<<<blocksPerGrid,
@@ -543,6 +560,7 @@ void *kernelInit() {
 	KernelContext *ctx = (KernelContext*) calloc(1, sizeof(KernelContext));
 	cudaMalloc(&ctx->dbacklogs, sizeof(ctx->backlogs));
 	cudaMalloc(&ctx->ddiffs, sizeof(ctx->diffs));
+	cudaMalloc(&ctx->dmotions, sizeof(ctx->motions));
 	return ctx;
 }
 
@@ -556,5 +574,6 @@ void kernelFinalize(void *p) {
 	}
 	cudaFree(ctx->dbacklogs);
 	cudaFree(ctx->ddiffs);
+	cudaFree(ctx->dmotions);
 	free(ctx);
 }
