@@ -13,7 +13,7 @@ GST_DEBUG_CATEGORY_STATIC(gst_webcam_filter_debug);
 // Filter props
 enum {
 	PROP_0,
-	PROP_SILENT
+	PROP_METHOD,
 };
 
 // The capabilities of the inputs and outputs
@@ -38,7 +38,7 @@ G_DEFINE_TYPE(GstWebcamFilter, gst_webcam_filter, GST_TYPE_VIDEO_FILTER);
 static GstFlowReturn transform(GstVideoFilter *filter,
 		GstVideoFrame *inframe, GstVideoFrame *outframe) {
 	GstWebcamFilter *wfilter = (GstWebcamFilter*) filter;
-	denoise(wfilter->ctx, AKNN,
+	denoise(wfilter->ctx, wfilter->method,
 			(const uint32_t*) inframe->data[0],
 			(uint32_t*) outframe->data[0],
 			inframe->info.height, inframe->info.width);
@@ -47,6 +47,7 @@ static GstFlowReturn transform(GstVideoFilter *filter,
 }
 
 static void gst_webcam_filter_init(GstWebcamFilter *filter) {
+	filter->method = AKNN;
 	filter->ctx = kernelInit();
 }
 
@@ -55,9 +56,52 @@ static void gst_webcam_filter_finalize(GObject *obj) {
 	kernelFinalize(filter->ctx);
 }
 
+static void gst_webcam_filter_set_property(GObject *obj, guint prop_id,
+		const GValue *value, GParamSpec *pspec) {
+	GstWebcamFilter *filter = (GstWebcamFilter*) obj;
+	switch (prop_id) {
+	case PROP_METHOD:
+		GST_OBJECT_LOCK(obj);
+		filter->method = g_value_get_enum(value);
+		GST_OBJECT_UNLOCK(obj);
+	}
+}
+
+static void gst_webcam_filter_get_property(GObject *obj, guint prop_id,
+		GValue *value, GParamSpec *pspec) {
+	GstWebcamFilter *filter = (GstWebcamFilter*) obj;
+	switch (prop_id) {
+	case PROP_METHOD:
+		GST_OBJECT_LOCK(obj);
+		g_value_set_enum(value, filter->method);
+		GST_OBJECT_UNLOCK(obj);
+	}
+}
+
 static void gst_webcam_filter_class_init(GstWebcamFilterClass *klass) {
 	GObjectClass *go_class = (GObjectClass*) klass;
 	go_class->finalize = gst_webcam_filter_finalize;
+	go_class->set_property = gst_webcam_filter_set_property;
+	go_class->get_property = gst_webcam_filter_get_property;
+
+	// Install PROP_METHOD
+	static const GEnumValue methods[] = {
+		SPATIAL, "spatial", "spatial",
+		TEMPORAL_AVG, "temporal-avg", "temporal-avg",
+		ADAPTIVE_TEMPORAL_AVG, "adaptive-temporal-avg", "adaptive-temporal-avg",
+		KNN, "knn", "knn",
+		AKNN, "aknn", "aknn",
+		DIFF, "diff", "diff",
+		SOBEL, "sobel", "sobel",
+		MOTION, "motion", "motion",
+		0, 0, 0,
+	};
+	GType method_type = g_enum_register_static(
+			"GstWebcamFilterMethod", methods);
+	g_object_class_install_property(go_class, PROP_METHOD,
+			g_param_spec_enum("method", "method", "method",
+				method_type, AKNN,
+				G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 	GstElementClass *ge_class = (GstElementClass*) klass;
 	gst_element_class_set_details_simple(ge_class,
