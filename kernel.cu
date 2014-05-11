@@ -22,6 +22,7 @@ typedef struct {
 typedef struct {
 	uint32_t *backlogs[BACKLOG_SIZE+1];
 	uint32_t *diffs[NDIFFS+1];
+	uint32_t **dbacklogs, **ddiffs;
 } KernelContext;
 
 __device__ inline static double distance(int32_t u, int32_t v) {
@@ -85,22 +86,13 @@ __device__ uint32_t diffPixel(uint32_t u, uint32_t v) {
 }
 
 __global__ static void updateDiff(
-		KernelContext *ctx, int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	uint32_t *d0 = ctx->diffs[0];
-	uint32_t *b0 = ctx->backlogs[0];
-	uint32_t *b1 = ctx->backlogs[1];
-	if (b0 == 0 || b1 == 0) {
+		uint32_t *d, uint32_t *b0, uint32_t *b1, int w) {
+	if (!(b0 && b1)) {
 		return;
 	}
-	for (k = lower; k < upper; k++) {
-		d0[k] = diff(b0[k], b1[k]);
-	}
+	int k = (blockDim.x * blockIdx.x + threadIdx.x) * w +
+		blockDim.y * blockIdx.y + threadIdx.y;
+	d[k] = diff(b0[k], b1[k]);
 }
 
 #define in(i, j) in[(i)*w + (j)]
@@ -110,97 +102,79 @@ __global__ static void updateDiff(
 		for (j2 = max(0, j - wd); min(w, j2 < j + wd); j2++)
 
 __global__ void denoiseKernelSpatial(
-		const uint32_t *in, uint32_t *out, int h,
-		int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	for (k = lower; k < upper; k++) {
-		int i = k / w, j = k % w;
-		double dmin = INFINITY;
-		int i2, j2, i3, j3;
-		FOR_WINDOW(i2, j2, i, j, h, w, HALF_WINDOW) {
-			double d = 0;
-			FOR_WINDOW(i3, j3, i, j, h, w, HALF_WINDOW) {
-				d += distance(in(i2, j2), in(i3, j3));
-			}
-			if (dmin > d) {
-				dmin = d;
-				out(i, j) = in(i2, j2);
-			}
+		const uint32_t *in, uint32_t *out, int h, int w) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = i * w + j;
+
+	double dmin = INFINITY;
+	int i2, j2, i3, j3;
+	FOR_WINDOW(i2, j2, i, j, h, w, HALF_WINDOW) {
+		double d = 0;
+		FOR_WINDOW(i3, j3, i, j, h, w, HALF_WINDOW) {
+			d += distance(in(i2, j2), in(i3, j3));
+		}
+		if (dmin > d) {
+			dmin = d;
+			out[k] = in(i2, j2);
 		}
 	}
 }
 
 __global__ void denoiseKernelSobel(
 		const uint32_t *in, int frame, double *sout, uint32_t *out, int h,
-		int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	for (k = lower; k < upper; k++) {
-		int x = k / w, y = k % w;
-		if (x == 0 || x == h-1 || y == 0 || y == w-1) {
-			out[k] = 0;
-			if (sout != 0) {
-				sout[k] = 0;
-			}
-			continue;
-		}
-		int gx = lum(in(x-1, y+1)) + 2 * lum(in(x, y+1)) + lum(in(x+1, y+1))
-			   - lum(in(x-1, y-1)) - 2 * lum(in(x, y-1)) - lum(in(x+1, y-1));
-		int gy = lum(in(x-1, y-1)) + 2 * lum(in(x-1, y)) + lum(in(x-1, y+1))
-			   - lum(in(x+1, y-1)) - 2 * lum(in(x+1, y)) - lum(in(x+1, y+1));
-		/*
-		int g = sqrt((gx * gx + gy * gy) / 50.0);
-		*/
-		int g = ((gx * gx + gy * gy) > 2000) * 0xff;
-		/*
-		if (g > 0x5) {
-			g = 0xff;
-		} else {
-			g = 0;
-		}
-		*/
-		out[k] = g | (g << 8) | (g << 16);
+		int w) {
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = x * w + y;
+
+	if (x == 0 || x == h-1 || y == 0 || y == w-1) {
+		out[k] = 0;
 		if (sout != 0) {
-			sout[k] = sqrt(double(gx * gx + gy * gy));
+			sout[k] = 0;
 		}
+		return;
+	}
+	int gx = lum(in(x-1, y+1)) + 2 * lum(in(x, y+1)) + lum(in(x+1, y+1))
+		   - lum(in(x-1, y-1)) - 2 * lum(in(x, y-1)) - lum(in(x+1, y-1));
+	int gy = lum(in(x-1, y-1)) + 2 * lum(in(x-1, y)) + lum(in(x-1, y+1))
+		   - lum(in(x+1, y-1)) - 2 * lum(in(x+1, y)) - lum(in(x+1, y+1));
+	/*
+	int g = sqrt((gx * gx + gy * gy) / 50.0);
+	*/
+	int g = ((gx * gx + gy * gy) > 2000) * 0xff;
+	/*
+	if (g > 0x5) {
+		g = 0xff;
+	} else {
+		g = 0;
+	}
+	*/
+	out[k] = g | (g << 8) | (g << 16);
+	if (sout != 0) {
+		sout[k] = sqrt(double(gx * gx + gy * gy));
 	}
 }
 
 __global__ void denoiseKernelTemporalAvg(
-		KernelContext *ctx, uint32_t *out,
-		int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
+		uint32_t **backlogs, uint32_t *out, int w) {
+	int k = (blockDim.x * blockIdx.x + threadIdx.x) * w +
+		blockDim.y * blockIdx.y + threadIdx.y;
+
+	int i, r = 0, g = 0, b = 0;
+	for (i = 0; i < BACKLOG_SIZE && backlogs[i]; i++) {
+		uint32_t v = backlogs[i][k];
+		r += v & 0xff;
+		g += (v >> 8) & 0xff;
+		b += (v >> 16) & 0xff;
 	}
-	uint32_t **backlogs = ctx->backlogs;
-	for (k = lower; k < upper; k++) {
-		int i, r = 0, g = 0, b = 0;
-		for (i = 0; i < BACKLOG_SIZE && backlogs[i]; i++) {
-			uint32_t v = backlogs[i][k];
-			r += v & 0xff;
-			g += (v >> 8) & 0xff;
-			b += (v >> 16) & 0xff;
-		}
-		r /= i;
-		g /= i;
-		b /= i;
-		r &= 0xff;
-		g &= 0xff;
-		b &= 0xff;
-		out[k] = r | (g << 8) | (b << 16);
-	}
+	r /= i;
+	g /= i;
+	b /= i;
+	r &= 0xff;
+	g &= 0xff;
+	b &= 0xff;
+	out[k] = r | (g << 8) | (b << 16);
 }
 
 enum {
@@ -209,73 +183,66 @@ enum {
 };
 
 __global__ void denoiseKernelAdaptiveTemporalAvg(
-		KernelContext *ctx, int nbacklogs, uint32_t *out,
-		int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	uint32_t **backlogs = ctx->backlogs;
-	for (k = lower; k < upper; k++) {
-		int c = nbacklogs / 2, i, j, r = 0, g = 0, b = 0;
-		int dsum = 0;
-		uint32_t vc = backlogs[c][k];
-		/*
-		for (i = c; i >= 0; i--) {
-			uint32_t v = backlogs[i][k];
-			dsum += distance(v, lastv);
-			if (distance(vc, v) > D0_THRESHOLD || dsum > DSUM_THRESHOLD) {
-				break;
-			}
-			r += v & 0xff;
-			g += (v >> 8) & 0xff;
-			b += (v >> 16) & 0xff;
-			lastv = v;
-		}
-		j = i;
-		lastv = vc;
-		for (i = c + 1; i < BACKLOG_SIZE && backlogs[i]; i++) {
-			uint32_t v = backlogs[i][k];
-			dsum += distance(v, lastv);
-			if (distance(vc, v) > D0_THRESHOLD || dsum > DSUM_THRESHOLD) {
-				break;
-			}
-			r += v & 0xff;
-			g += (v >> 8) & 0xff;
-			b += (v >> 16) & 0xff;
-			lastv = v;
-		}
-		*/
-		uint32_t vi_last = vc, vj_last = vc;
-		for (i = j = c; i < nbacklogs && j >= 0; i++, j--) {
-			uint32_t vi = backlogs[i][k], vj = backlogs[j][k];
-			dsum += distance(vi, vi_last) + distance(vj, vj_last);
-			if (distance(vc, vi) > D0_THRESHOLD ||
-				distance(vc, vj) > D0_THRESHOLD ||
-				dsum > DSUM_THRESHOLD) {
-				break;
-			}
-			r += vi & 0xff;
-			g += (vi >> 8) & 0xff;
-			b += (vi >> 16) & 0xff;
-			r += vj & 0xff;
-			g += (vj >> 8) & 0xff;
-			b += (vj >> 16) & 0xff;
-			vi_last = vi;
-			vj_last = vj;
-		}
-		r /= i - j;
-		g /= i - j;
-		b /= i - j;
-		r &= 0xff;
-		g &= 0xff;
-		b &= 0xff;
+		uint32_t **backlogs, int nbacklogs, uint32_t *out, int w) {
+	int k = (blockDim.x * blockIdx.x + threadIdx.x) * w +
+		blockDim.y * blockIdx.y + threadIdx.y;
 
-		//r = g = b = 0xff * (i - j) / nbacklogs;
-		out[k] = r | (g << 8) | (b << 16);
+	int c = nbacklogs / 2, i, j, r = 0, g = 0, b = 0;
+	int dsum = 0;
+	uint32_t vc = backlogs[c][k];
+	/*
+	for (i = c; i >= 0; i--) {
+		uint32_t v = backlogs[i][k];
+		dsum += distance(v, lastv);
+		if (distance(vc, v) > D0_THRESHOLD || dsum > DSUM_THRESHOLD) {
+			break;
+		}
+		r += v & 0xff;
+		g += (v >> 8) & 0xff;
+		b += (v >> 16) & 0xff;
+		lastv = v;
 	}
+	j = i;
+	lastv = vc;
+	for (i = c + 1; i < BACKLOG_SIZE && backlogs[i]; i++) {
+		uint32_t v = backlogs[i][k];
+		dsum += distance(v, lastv);
+		if (distance(vc, v) > D0_THRESHOLD || dsum > DSUM_THRESHOLD) {
+			break;
+		}
+		r += v & 0xff;
+		g += (v >> 8) & 0xff;
+		b += (v >> 16) & 0xff;
+		lastv = v;
+	}
+	*/
+	uint32_t vi_last = vc, vj_last = vc;
+	for (i = j = c; i < nbacklogs && j >= 0; i++, j--) {
+		uint32_t vi = backlogs[i][k], vj = backlogs[j][k];
+		dsum += distance(vi, vi_last) + distance(vj, vj_last);
+		if (distance(vc, vi) > D0_THRESHOLD ||
+			distance(vc, vj) > D0_THRESHOLD ||
+			dsum > DSUM_THRESHOLD) {
+			break;
+		}
+		r += vi & 0xff;
+		g += (vi >> 8) & 0xff;
+		b += (vi >> 16) & 0xff;
+		r += vj & 0xff;
+		g += (vj >> 8) & 0xff;
+		b += (vj >> 16) & 0xff;
+		vi_last = vi;
+		vj_last = vj;
+	}
+	r /= i - j;
+	g /= i - j;
+	b /= i - j;
+	r &= 0xff;
+	g &= 0xff;
+	b &= 0xff;
+
+	//r = g = b = 0xff * (i - j) / nbacklogs;
+	out[k] = r | (g << 8) | (b << 16);
 }
 
 enum {
@@ -284,224 +251,195 @@ enum {
 };
 
 __global__ void denoiseKernelMotion(
-		KernelContext *ctx, int nbacklogs, uint32_t *out,
-		int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	uint32_t **diffs = ctx->diffs;
-	for (k = lower; k < upper; k++) {
-		int i = k / w, j = k % w;
-		int i2, j2;
-		int t;
-		// Motion detection
-		for (t = 0; t < NDIFFS && diffs[t]; t++) {
-			if (diffs[t][k] < Z_THRM) {
-				continue;
-			}
-			int excess = 0;
-			FOR_WINDOW(i2, j2, i, j, h, w, 1) {
-				int k2 = i2 * w + j2;
-				if (k2 != k && diffs[t][k2] >= Z_THRM) {
-					excess++;
-					if (excess == 2) {
-						goto after_md;
-					}
+		uint32_t **diffs, uint32_t *out, int h, int w) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = i * w + j;
+
+	int i2, j2;
+	int t;
+	// Motion detection
+	for (t = 0; t < NDIFFS && diffs[t]; t++) {
+		if (diffs[t][k] < Z_THRM) {
+			continue;
+		}
+		int excess = 0;
+		FOR_WINDOW(i2, j2, i, j, h, w, 1) {
+			int k2 = i2 * w + j2;
+			if (k2 != k && diffs[t][k2] >= Z_THRM) {
+				excess++;
+				if (excess == 2) {
+					goto after_md;
 				}
 			}
 		}
-after_md:
-		int v = 0xff * (NDIFFS - t) / NDIFFS;
-		out[k] = v | (v << 8) | (v << 16);
 	}
+after_md:
+	int v = 0xff * (NDIFFS - t) / NDIFFS;
+	out[k] = v | (v << 8) | (v << 16);
 }
 
 __global__ void denoiseKernelZlokolica(
-		KernelContext *ctx, int nbacklogs, uint32_t *out,
-		int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	uint32_t **backlogs = ctx->backlogs;
+		uint32_t **backlogs, uint32_t **diffs, int nbacklogs, uint32_t *out,
+		int h, int w) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = i * w + j;
+
 	uint32_t *in = backlogs[0];
-	uint32_t **diffs = ctx->diffs;
-	for (k = lower; k < upper; k++) {
-		if (nbacklogs == 1) {
-			out[k] = backlogs[0][k];
+
+	if (nbacklogs == 1) {
+		out[k] = backlogs[0][k];
+		return;
+	}
+
+	int i2, j2;
+	int nf;
+	// Motion detection
+	for (nf = 0; nf < NDIFFS && diffs[nf]; nf++) {
+		if (diffs[nf][k] < Z_THRM) {
 			continue;
 		}
+		int excess = 0;
+		FOR_WINDOW(i2, j2, i, j, h, w, 1) {
+			int k2 = i2 * w + j2;
+			if (k2 != k && diffs[nf][k2] >= Z_THRM) {
+				excess++;
+				if (excess == 2) {
+					goto after_md;
+				}
+			}
+		}
+	}
+after_md:
+	if (nf < nbacklogs-1) {
+		nf++;
+	}
 
-		int i = k / w, j = k % w;
-		int i2, j2;
-		int nf;
-		// Motion detection
-		for (nf = 0; nf < NDIFFS && diffs[nf]; nf++) {
-			if (diffs[nf][k] < Z_THRM) {
+	// Edge detection
+	bool edge = false;
+	if (i > 0 && i < h-1 && j > 0 && j < w-1) {
+		int gi = lum(in(i-1, j+1)) + 2 * lum(in(i, j+1)) + lum(in(i+1, j+1))
+			   - lum(in(i-1, j-1)) - 2 * lum(in(i, j-1)) - lum(in(i+1, j-1));
+		int gj = lum(in(i-1, j-1)) + 2 * lum(in(i-1, j)) + lum(in(i-1, j+1))
+			   - lum(in(i+1, j-1)) - 2 * lum(in(i+1, j)) - lum(in(i+1, j+1));
+		edge = (gi * gi + gj * gj) > 1250;
+	}
+
+	uint32_t center = backlogs[0][k];
+	knnElem elems[KNN_NELEMS+1];
+	int nelems = 0;
+	int t, e;
+	FOR_WINDOW(i2, j2, i, j, h, w, 1) {
+		for (t = 0; t < nf; t++) {
+			uint32_t v = backlogs[t][i2*w+j2];
+			double d = distance(v, center);
+			if (edge && d > Z_THRD) {
 				continue;
 			}
-			int excess = 0;
-			FOR_WINDOW(i2, j2, i, j, h, w, 1) {
-				int k2 = i2 * w + j2;
-				if (k2 != k && diffs[nf][k2] >= Z_THRM) {
-					excess++;
-					if (excess == 2) {
-						goto after_md;
-					}
-				}
-			}
-		}
-after_md:
-		if (nf < nbacklogs-1) {
-			nf++;
-		}
-
-		// Edge detection
-		bool edge = false;
-		if (i > 0 && i < h-1 && j > 0 && j < w-1) {
-			int gi = lum(in(i-1, j+1)) + 2 * lum(in(i, j+1)) + lum(in(i+1, j+1))
-				   - lum(in(i-1, j-1)) - 2 * lum(in(i, j-1)) - lum(in(i+1, j-1));
-			int gj = lum(in(i-1, j-1)) + 2 * lum(in(i-1, j)) + lum(in(i-1, j+1))
-				   - lum(in(i+1, j-1)) - 2 * lum(in(i+1, j)) - lum(in(i+1, j+1));
-			edge = (gi * gi + gj * gj) > 1250;
-		}
-
-		uint32_t center = backlogs[0][k];
-		knnElem elems[KNN_NELEMS+1];
-		int nelems = 0;
-		int t, e;
-		FOR_WINDOW(i2, j2, i, j, h, w, 1) {
-			for (t = 0; t < nf; t++) {
-				uint32_t v = backlogs[t][i2*w+j2];
-				double d = distance(v, center);
-				if (edge && d > Z_THRD) {
-					continue;
-				}
-				// Insert v into elems
-				for (e = nelems-1; e >= 0 && elems[e].d > d; e--) {
-					if (e < KNN_NELEMS-1) {
-						elems[e+1] = elems[e];
-					}
-				}
+			// Insert v into elems
+			for (e = nelems-1; e >= 0 && elems[e].d > d; e--) {
 				if (e < KNN_NELEMS-1) {
-					elems[e+1].v = v;
-					elems[e+1].d = d;
-				}
-				if (nelems < KNN_NELEMS) {
-					nelems++;
+					elems[e+1] = elems[e];
 				}
 			}
+			if (e < KNN_NELEMS-1) {
+				elems[e+1].v = v;
+				elems[e+1].d = d;
+			}
+			if (nelems < KNN_NELEMS) {
+				nelems++;
+			}
 		}
-		uint32_t r = 0, g = 0, b = 0;
-		for (e = 0; e < nelems; e++) {
-			uint32_t v = elems[e].v;
-			r += v & 0xff;
-			g += (v >> 8) & 0xff;
-			b += (v >> 16) & 0xff;
-		}
-		r /= e;
-		g /= e;
-		b /= e;
-		r &= 0xff;
-		g &= 0xff;
-		b &= 0xff;
-		out[k] = r | (g << 8) | (b << 16);
 	}
+	uint32_t r = 0, g = 0, b = 0;
+	for (e = 0; e < nelems; e++) {
+		uint32_t v = elems[e].v;
+		r += v & 0xff;
+		g += (v >> 8) & 0xff;
+		b += (v >> 16) & 0xff;
+	}
+	r /= e;
+	g /= e;
+	b /= e;
+	r &= 0xff;
+	g &= 0xff;
+	b &= 0xff;
+	out[k] = r | (g << 8) | (b << 16);
 }
 
 __global__ void denoiseKernelDiff(
-		KernelContext *ctx, int nbacklogs, uint32_t *out,
-		int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
+		uint32_t **backlogs, int nbacklogs, uint32_t *out, int w) {
+	int k = (blockDim.x * blockIdx.x + threadIdx.x) * w +
+		blockDim.y * blockIdx.y + threadIdx.y;
+
 	if (nbacklogs > 1) {
-		uint32_t **backlogs = ctx->backlogs;
-		for (k = lower; k < upper; k++) {
-			out[k] = diffPixel(backlogs[0][k], backlogs[1][k]);
-		}
+		out[k] = diffPixel(backlogs[0][k], backlogs[1][k]);
 	} else {
-		for (k = lower; k < upper; k++) {
-			out[k] = 0;
-		}
+		out[k] = 0;
 	}
 }
 
 __global__ void denoiseKernelKNN(
-		KernelContext *ctx, int nbacklogs, uint32_t *out,
-		int h, int w, int perThread) {
-	int k = blockDim.x * blockIdx.x + threadIdx.x;
-	int lower = k * perThread;
-	int upper = (k + 1) * perThread;
-	if (k == 256 * 32 - 1) {
-		upper = h * w;
-	}
-	uint32_t **backlogs = ctx->backlogs;
+		uint32_t **backlogs, int nbacklogs, uint32_t *out, int h, int w) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = i * w + j;
+
 	// Use at most KNN_FRAMES frames
 	if (nbacklogs > KNN_FRAMES) {
 		nbacklogs = KNN_FRAMES;
 	}
-	for (k = lower; k < upper; k++) {
-		int i = k / w, j = k % w;
-		uint32_t center;
-		if (nbacklogs == 1) {
-			center = backlogs[0][k];
-		} else {
-			center = backlogs[1][k];
-		}
-		knnElem elems[KNN_NELEMS+1];
-		int nelems = 0;
-		int i2, j2, t, e;
-		FOR_WINDOW(i2, j2, i, j, h, w, 1) {
-			for (t = 0; t < nbacklogs; t++) {
-				uint32_t v = backlogs[t][i2*w+j2];
-				double d = distance(v, center);
-				// Insert v into elems
-				for (e = nelems-1; e >= 0 && elems[e].d > d; e--) {
-					if (e < KNN_NELEMS-1) {
-						elems[e+1] = elems[e];
-					}
-				}
+
+	uint32_t center;
+	if (nbacklogs == 1) {
+		center = backlogs[0][k];
+	} else {
+		center = backlogs[1][k];
+	}
+	knnElem elems[KNN_NELEMS+1];
+	int nelems = 0;
+	int i2, j2, t, e;
+	FOR_WINDOW(i2, j2, i, j, h, w, 1) {
+		for (t = 0; t < nbacklogs; t++) {
+			uint32_t v = backlogs[t][i2*w+j2];
+			double d = distance(v, center);
+			// Insert v into elems
+			for (e = nelems-1; e >= 0 && elems[e].d > d; e--) {
 				if (e < KNN_NELEMS-1) {
-					elems[e+1].v = v;
-					elems[e+1].d = d;
-				}
-				if (nelems < KNN_NELEMS) {
-					nelems++;
+					elems[e+1] = elems[e];
 				}
 			}
+			if (e < KNN_NELEMS-1) {
+				elems[e+1].v = v;
+				elems[e+1].d = d;
+			}
+			if (nelems < KNN_NELEMS) {
+				nelems++;
+			}
 		}
-		uint32_t r = 0, g = 0, b = 0;
-		for (e = 0; e < nelems; e++) {
-			uint32_t v = elems[e].v;
-			r += v & 0xff;
-			g += (v >> 8) & 0xff;
-			b += (v >> 16) & 0xff;
-		}
-		r /= e;
-		g /= e;
-		b /= e;
-		r &= 0xff;
-		g &= 0xff;
-		b &= 0xff;
-		out[k] = r | (g << 8) | (b << 16);
 	}
+	uint32_t r = 0, g = 0, b = 0;
+	for (e = 0; e < nelems; e++) {
+		uint32_t v = elems[e].v;
+		r += v & 0xff;
+		g += (v >> 8) & 0xff;
+		b += (v >> 16) & 0xff;
+	}
+	r /= e;
+	g /= e;
+	b /= e;
+	r &= 0xff;
+	g &= 0xff;
+	b &= 0xff;
+	out[k] = r | (g << 8) | (b << 16);
 }
 
 void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	static int frame = 0;
 	KernelContext *ctx = (KernelContext*) p;
-	int threadsPerBlock = 256;
-	int blocksPerGrid = 32;
-	int perThread = h * w / (threadsPerBlock * blocksPerGrid);
+	dim3 threadsPerBlock(8, 8);
+	dim3 blocksPerGrid(h / 8, w / 8);
 
 	int size = h * w * sizeof(uint32_t);
 	uint32_t *dout;
@@ -516,30 +454,12 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		switch (m) {
 		case SPATIAL:
 			denoiseKernelSpatial<<<blocksPerGrid, threadsPerBlock>>>(
-					din, dout, h, w, perThread);
+					din, dout, h, w);
 			break;
 		case SOBEL:
 			double *dsobel = 0;
-			int ssize = size / 4 * sizeof(double);
-			/*
-			if (frame == 2) {
-				cudaMalloc(&dsobel, ssize);
-			}
-			*/
 			denoiseKernelSobel<<<blocksPerGrid, threadsPerBlock>>>(
-					din, frame, dsobel, dout, h, w, perThread);
-			/*
-			if (frame == 2) {
-				double *sobel = (double*) malloc(ssize);
-				cudaMemcpy(sobel, dsobel, ssize, cudaMemcpyDeviceToHost);
-				cudaFree(dsobel);
-				int k;
-				for (k = 0; k < size / 4; k++) {
-					printf("%g\n", sobel[k]);
-				}
-				free(sobel);
-			}
-			*/
+					din, frame, dsobel, dout, h, w);
 			break;
 		}
 		cudaFree(din);
@@ -572,43 +492,45 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 			}
 		}
 
-		KernelContext *dctx;
-		cudaMalloc(&dctx, sizeof(KernelContext));
-		cudaMemcpy(dctx, ctx, sizeof(KernelContext), cudaMemcpyHostToDevice);
+		cudaMemcpy(ctx->dbacklogs, ctx->backlogs, sizeof(ctx->backlogs),
+				cudaMemcpyHostToDevice);
+		cudaMemcpy(ctx->ddiffs, ctx->diffs, sizeof(ctx->diffs),
+				cudaMemcpyHostToDevice);
+
 		int i;
 		for (i = 0; i < BACKLOG_SIZE && ctx->backlogs[i]; i++)
 			;
+
 		switch (m) {
 		case DIFF:
 			denoiseKernelDiff<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, i, dout, h, w, perThread);
+				threadsPerBlock>>>(ctx->dbacklogs, i, dout, w);
 			break;
 		case TEMPORAL_AVG:
 			denoiseKernelTemporalAvg<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, dout, h, w, perThread);
+				threadsPerBlock>>>(ctx->dbacklogs, dout, w);
 			break;
 		case KNN:
 			denoiseKernelKNN<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, i, dout, h, w, perThread);
+				threadsPerBlock>>>(ctx->dbacklogs, i, dout, h, w);
 			break;
 		case ZLOKOLICA:
-			updateDiff<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, h, w, perThread);
+			updateDiff<<<blocksPerGrid, threadsPerBlock>>>(
+					ctx->diffs[0], ctx->backlogs[0], ctx->backlogs[1], w);
 			denoiseKernelZlokolica<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, i, dout, h, w, perThread);
+				threadsPerBlock>>>(ctx->dbacklogs, ctx->ddiffs, i, dout, h, w);
 			break;
 		case MOTION:
-			updateDiff<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, h, w, perThread);
+			updateDiff<<<blocksPerGrid, threadsPerBlock>>>(
+					ctx->diffs[0], ctx->backlogs[0], ctx->backlogs[1], w);
 			denoiseKernelMotion<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, i, dout, h, w, perThread);
+				threadsPerBlock>>>(ctx->ddiffs, dout, h, w);
 			break;
 		case ADAPTIVE_TEMPORAL_AVG:
 			denoiseKernelAdaptiveTemporalAvg<<<blocksPerGrid,
-				threadsPerBlock>>>(dctx, i, dout, h, w, perThread);
+				threadsPerBlock>>>(ctx->dbacklogs, i, dout, w);
 			break;
 		}
-		cudaFree(dctx);
 		break;
 	}
 
@@ -619,6 +541,8 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 
 void *kernelInit() {
 	KernelContext *ctx = (KernelContext*) calloc(1, sizeof(KernelContext));
+	cudaMalloc(&ctx->dbacklogs, sizeof(ctx->backlogs));
+	cudaMalloc(&ctx->ddiffs, sizeof(ctx->diffs));
 	return ctx;
 }
 
@@ -630,5 +554,7 @@ void kernelFinalize(void *p) {
 	for (int i = 0; i < NDIFFS; i++) {
 		cudaFree(ctx->diffs[i]);
 	}
+	cudaFree(ctx->dbacklogs);
+	cudaFree(ctx->ddiffs);
 	free(ctx);
 }
