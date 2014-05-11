@@ -38,7 +38,7 @@ G_DEFINE_TYPE(GstWebcamFilter, gst_webcam_filter, GST_TYPE_VIDEO_FILTER);
 static GstFlowReturn transform(GstVideoFilter *filter,
 		GstVideoFrame *inframe, GstVideoFrame *outframe) {
 	GstWebcamFilter *wfilter = (GstWebcamFilter*) filter;
-	denoise(wfilter->ctx, ZLOKOLICA,
+	denoise(wfilter->ctx, AKNN,
 			(const uint32_t*) inframe->data[0],
 			(uint32_t*) outframe->data[0],
 			inframe->info.height, inframe->info.width);

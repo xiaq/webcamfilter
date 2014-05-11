@@ -279,7 +279,7 @@ after_md:
 	out[k] = v | (v << 8) | (v << 16);
 }
 
-__global__ void denoiseKernelZlokolica(
+__global__ void denoiseKernelAKNN(
 		uint32_t **backlogs, uint32_t **diffs, int nbacklogs, uint32_t *out,
 		int h, int w) {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
@@ -468,7 +468,7 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	case TEMPORAL_AVG:
 	case ADAPTIVE_TEMPORAL_AVG:
 	case KNN:
-	case ZLOKOLICA:
+	case AKNN:
 	case MOTION:
 		// Cyclically right shift backlog
 		for (int i = BACKLOG_SIZE; i > 0; i--) {
@@ -481,7 +481,7 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		cudaMemcpy(ctx->backlogs[0], in, size, cudaMemcpyHostToDevice);
 
 		switch (m) {
-		case ZLOKOLICA:
+		case AKNN:
 		case MOTION:
 			for (int i = NDIFFS; i > 0; i--) {
 				ctx->diffs[i] = ctx->diffs[i-1];
@@ -514,10 +514,10 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 			denoiseKernelKNN<<<blocksPerGrid,
 				threadsPerBlock>>>(ctx->dbacklogs, i, dout, h, w);
 			break;
-		case ZLOKOLICA:
+		case AKNN:
 			updateDiff<<<blocksPerGrid, threadsPerBlock>>>(
 					ctx->diffs[0], ctx->backlogs[0], ctx->backlogs[1], w);
-			denoiseKernelZlokolica<<<blocksPerGrid,
+			denoiseKernelAKNN<<<blocksPerGrid,
 				threadsPerBlock>>>(ctx->dbacklogs, ctx->ddiffs, i, dout, h, w);
 			break;
 		case MOTION:
