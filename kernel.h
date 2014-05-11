@@ -3,12 +3,16 @@ extern void *kernelInit(void);
 extern void kernelFinalize(void*);
 
 enum {
+	// "Real" filters
 	SPATIAL,
 	TEMPORAL_AVG,
+	ADAPTIVE_TEMPORAL_AVG,
 	KNN,
 	AKNN,
-	ADAPTIVE_TEMPORAL_AVG,
+	// Helpers
 	DIFF,
 	SOBEL,
 	MOTION,
+
+	NFILTERS,
 };
