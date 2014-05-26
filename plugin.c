@@ -87,6 +87,7 @@ static void gst_webcam_filter_class_init(GstWebcamFilterClass *klass) {
 	// Install PROP_METHOD
 	static const GEnumValue methods[] = {
 		SPATIAL, "spatial", "spatial",
+		SPATIAL_KNN, "spatial-knn", "spatial-knn",
 		TEMPORAL_AVG, "temporal-avg", "ta",
 		ADAPTIVE_TEMPORAL_AVG, "adaptive-temporal-avg", "ata",
 		KNN, "knn", "knn",

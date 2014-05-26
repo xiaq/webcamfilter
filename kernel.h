@@ -5,6 +5,7 @@ extern void kernelFinalize(void*);
 enum {
 	// "Real" filters
 	SPATIAL,
+	SPATIAL_KNN,
 	TEMPORAL_AVG,
 	ADAPTIVE_TEMPORAL_AVG,
 	KNN,

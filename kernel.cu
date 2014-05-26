@@ -21,24 +21,18 @@ enum {
 
 typedef struct {
 	uint32_t v;
-	double d;
+	uint32_t d;
 } knnElem;
 
 typedef struct {
 	uint32_t *backlogs[BACKLOG_SIZE+1];
 	uint32_t *diffs[NDIFFS+1];
 	bool *motions[NDIFFS+1];
+	bool *m0;
 
 	uint32_t **dbacklogs, **ddiffs;
 	bool **dmotions;
 } KernelContext;
-
-__device__ inline static double distance(int32_t u, int32_t v) {
-	int r = (u & 0xff) - (v & 0xff),
-		g = ((u >> 8) & 0xff) - ((v >> 8) & 0xff),
-		b = ((u >> 16) & 0xff) - ((v >> 16) & 0xff);
-	return sqrt(double(r * r + g * g + b * b));
-}
 
 __device__ uint32_t lum(uint32_t u) {
 	int r = u & 0xff,
@@ -46,6 +40,18 @@ __device__ uint32_t lum(uint32_t u) {
 		b = (u >> 16) & 0xff;
 	int l = 0.299 * r + 0.587 * g + 0.114 * b;
 	return l > 0xff ? 0xff : l;
+}
+
+/*
+__device__ inline static double distance(int32_t u, int32_t v) {
+	int r = (u & 0xff) - (v & 0xff),
+		g = ((u >> 8) & 0xff) - ((v >> 8) & 0xff),
+		b = ((u >> 16) & 0xff) - ((v >> 16) & 0xff);
+	return sqrt(double(r * r + g * g + b * b));
+}
+*/
+__device__ inline static uint32_t distance(int32_t u, int32_t v) {
+	return abs(int(lum(u)) - int(lum(v)));
 }
 
 __device__ uint32_t diff(uint32_t u, uint32_t v) {
@@ -118,8 +124,9 @@ __global__ static void updateMotion(
 	int j = blockDim.y * blockIdx.y + threadIdx.y;
 	int k = i * w + j;
 
+	m[k] = false;
 	if (d[k] < Z_THRM) {
-		m[k] = false;
+		return;
 	}
 
 	int i2, j2;
@@ -133,6 +140,27 @@ __global__ static void updateMotion(
 				return;
 			}
 		}
+	}
+}
+
+__global__ static void dilateMotion(
+		bool *m, bool *m0, int h, int w) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = i * w + j;
+
+	if (m0[k]) {
+		m[k] = true;
+	} else {
+		int i2, j2;
+		FOR_WINDOW(i2, j2, i, j, h, w, 3) {
+			int k2 = i2 * w + j2;
+			if (m0[k2]) {
+				m[k] = true;
+				return;
+			}
+		}
+		m[k] = false;
 	}
 }
 
@@ -154,6 +182,52 @@ __global__ void denoiseKernelSpatial(
 			out[k] = in(i2, j2);
 		}
 	}
+}
+
+__global__ void denoiseKernelSpatialKNN(
+		const uint32_t *in, uint32_t *out, int h, int w) {
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = i * w + j;
+	uint32_t center = in[k];
+	int nelems = 0;
+	knnElem elems[KNN_NELEMS+1];
+	int i2, j2, e;
+	FOR_WINDOW(i2, j2, i, j, h, w, 3) {
+		int m = abs(i2-i) + abs(j2-j);
+		if (m == 1 || m == 2) {
+			continue;
+		}
+		uint32_t v = in[i2*w+j2];
+		double d = distance(v, center);
+		// Insert v into elems
+		for (e = nelems-1; e >= 0 && elems[e].d > d; e--) {
+			if (e < KNN_NELEMS-1) {
+				elems[e+1] = elems[e];
+			}
+		}
+		if (e < KNN_NELEMS-1) {
+			elems[e+1].v = v;
+			elems[e+1].d = d;
+		}
+		if (nelems < KNN_NELEMS) {
+			nelems++;
+		}
+	}
+	uint32_t r = 0, g = 0, b = 0;
+	for (e = 0; e < nelems; e++) {
+		uint32_t v = elems[e].v;
+		r += v & 0xff;
+		g += (v >> 8) & 0xff;
+		b += (v >> 16) & 0xff;
+	}
+	r /= e;
+	g /= e;
+	b /= e;
+	r &= 0xff;
+	g &= 0xff;
+	b &= 0xff;
+	out[k] = r | (g << 8) | (b << 16);
 }
 
 __global__ void denoiseKernelSobel(
@@ -464,6 +538,7 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 
 	switch (m) {
 	case SPATIAL:
+	case SPATIAL_KNN:
 	case SOBEL:
 		uint32_t *din;
 		cudaMalloc(&din, size);
@@ -471,6 +546,10 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		switch (m) {
 		case SPATIAL:
 			denoiseKernelSpatial<<<blocksPerGrid, threadsPerBlock>>>(
+					din, dout, h, w);
+			break;
+		case SPATIAL_KNN:
+			denoiseKernelSpatialKNN<<<blocksPerGrid, threadsPerBlock>>>(
 					din, dout, h, w);
 			break;
 		case SOBEL:
@@ -507,8 +586,14 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 				cudaMalloc(&ctx->motions[0],
 						size / sizeof(uint32_t) * sizeof(bool));
 			}
+			if (ctx->m0 == 0) {
+				cudaMalloc(&ctx->m0,
+						size / sizeof(uint32_t) * sizeof(bool));
+			}
 			updateMotion<<<blocksPerGrid, threadsPerBlock>>>(
-					ctx->motions[0], ctx->diffs[0], h, w);
+					ctx->m0, ctx->diffs[0], h, w);
+			dilateMotion<<<blocksPerGrid, threadsPerBlock>>>(
+					ctx->motions[0], ctx->m0, h, w);
 		}
 
 		cudaMemcpy(ctx->dbacklogs, ctx->backlogs, sizeof(ctx->backlogs),
@@ -575,5 +660,6 @@ void kernelFinalize(void *p) {
 	cudaFree(ctx->dbacklogs);
 	cudaFree(ctx->ddiffs);
 	cudaFree(ctx->dmotions);
+	cudaFree(ctx->m0);
 	free(ctx);
 }
