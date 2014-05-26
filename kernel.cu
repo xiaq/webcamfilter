@@ -529,8 +529,8 @@ void ror(T *a, int n) {
 void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	static int frame = 0;
 	KernelContext *ctx = (KernelContext*) p;
-	dim3 threadsPerBlock(8, 8);
-	dim3 blocksPerGrid(h / 8, w / 8);
+	dim3 blockDim(8, 8);
+	dim3 gridDim(h / blockDim.x, w / blockDim.y);
 
 	int size = h * w * sizeof(uint32_t);
 	uint32_t *dout;
@@ -545,16 +545,16 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		cudaMemcpy(din, in, size, cudaMemcpyHostToDevice);
 		switch (m) {
 		case SPATIAL:
-			denoiseKernelSpatial<<<blocksPerGrid, threadsPerBlock>>>(
+			denoiseKernelSpatial<<<gridDim, blockDim>>>(
 					din, dout, h, w);
 			break;
 		case SPATIAL_KNN:
-			denoiseKernelSpatialKNN<<<blocksPerGrid, threadsPerBlock>>>(
+			denoiseKernelSpatialKNN<<<gridDim, blockDim>>>(
 					din, dout, h, w);
 			break;
 		case SOBEL:
 			double *dsobel = 0;
-			denoiseKernelSobel<<<blocksPerGrid, threadsPerBlock>>>(
+			denoiseKernelSobel<<<gridDim, blockDim>>>(
 					din, frame, dsobel, dout, h, w);
 			break;
 		}
@@ -579,7 +579,7 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 			if (ctx->diffs[0] == 0) {
 				cudaMalloc(&ctx->diffs[0], size);
 			}
-			updateDiff<<<blocksPerGrid, threadsPerBlock>>>(
+			updateDiff<<<gridDim, blockDim>>>(
 					ctx->diffs[0], ctx->backlogs[0], ctx->backlogs[1], w);
 			ror(ctx->motions, NDIFFS);
 			if (ctx->motions[0] == 0) {
@@ -590,9 +590,9 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 				cudaMalloc(&ctx->m0,
 						size / sizeof(uint32_t) * sizeof(bool));
 			}
-			updateMotion<<<blocksPerGrid, threadsPerBlock>>>(
+			updateMotion<<<gridDim, blockDim>>>(
 					ctx->m0, ctx->diffs[0], h, w);
-			dilateMotion<<<blocksPerGrid, threadsPerBlock>>>(
+			dilateMotion<<<gridDim, blockDim>>>(
 					ctx->motions[0], ctx->m0, h, w);
 		}
 
@@ -609,28 +609,28 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 
 		switch (m) {
 		case DIFF:
-			denoiseKernelDiff<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->dbacklogs, i, dout, w);
+			denoiseKernelDiff<<<gridDim,
+				blockDim>>>(ctx->dbacklogs, i, dout, w);
 			break;
 		case TEMPORAL_AVG:
-			denoiseKernelTemporalAvg<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->dbacklogs, dout, w);
+			denoiseKernelTemporalAvg<<<gridDim,
+				blockDim>>>(ctx->dbacklogs, dout, w);
 			break;
 		case KNN:
-			denoiseKernelKNN<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->dbacklogs, i, dout, h, w);
+			denoiseKernelKNN<<<gridDim,
+				blockDim>>>(ctx->dbacklogs, i, dout, h, w);
 			break;
 		case AKNN:
-			denoiseKernelAKNN<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->dbacklogs, ctx->dmotions, i, dout, h, w);
+			denoiseKernelAKNN<<<gridDim,
+				blockDim>>>(ctx->dbacklogs, ctx->dmotions, i, dout, h, w);
 			break;
 		case MOTION:
-			denoiseKernelMotion<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->dmotions, dout, h, w);
+			denoiseKernelMotion<<<gridDim,
+				blockDim>>>(ctx->dmotions, dout, h, w);
 			break;
 		case ADAPTIVE_TEMPORAL_AVG:
-			denoiseKernelAdaptiveTemporalAvg<<<blocksPerGrid,
-				threadsPerBlock>>>(ctx->dbacklogs, i, dout, w);
+			denoiseKernelAdaptiveTemporalAvg<<<gridDim,
+				blockDim>>>(ctx->dbacklogs, i, dout, w);
 			break;
 		}
 		break;
