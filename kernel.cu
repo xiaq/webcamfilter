@@ -529,7 +529,7 @@ void ror(T *a, int n) {
 void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	static int frame = 0;
 	KernelContext *ctx = (KernelContext*) p;
-	dim3 blockDim(8, 8);
+	dim3 blockDim(4, 32);
 	dim3 gridDim(h / blockDim.x, w / blockDim.y);
 
 	int size = h * w * sizeof(uint32_t);
