@@ -671,6 +671,7 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 }
 
 void *kernelInit() {
+	cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
 	KernelContext *ctx = (KernelContext*) calloc(1, sizeof(KernelContext));
 	cudaMalloc(&ctx->dbacklogs, sizeof(ctx->backlogs));
 	cudaMalloc(&ctx->ddiffs, sizeof(ctx->diffs));
