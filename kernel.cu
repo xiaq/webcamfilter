@@ -199,7 +199,7 @@ __global__ void denoiseKernelSpatialKNN(
 			continue;
 		}
 		uint32_t v = in[i2*w+j2];
-		double d = distance(v, center);
+		uint32_t d = distance(v, center);
 		// Insert v into elems
 		for (e = nelems-1; e >= 0 && elems[e].d > d; e--) {
 			if (e < KNN_NELEMS-1) {
@@ -421,7 +421,7 @@ __global__ void denoiseKernelAKNN(
 	FOR_WINDOW(i2, j2, i, j, h, w, 1) {
 		for (t = 0; t < nf; t++) {
 			uint32_t v = backlogs[t][i2*w+j2];
-			double d = distance(v, center);
+			uint32_t d = distance(v, center);
 			if (edge && d > Z_THRD) {
 				continue;
 			}
@@ -491,7 +491,7 @@ __global__ void denoiseKernelKNN(
 	FOR_WINDOW(i2, j2, i, j, h, w, 1) {
 		for (t = 0; t < nbacklogs; t++) {
 			uint32_t v = backlogs[t][i2*w+j2];
-			double d = distance(v, center);
+			uint32_t d = distance(v, center);
 			// Insert v into elems
 			for (e = nelems-1; e >= 0 && elems[e].d > d; e--) {
 				if (e < KNN_NELEMS-1) {
