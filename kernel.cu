@@ -265,6 +265,13 @@ __global__ void denoiseKernelSobel(
 	}
 }
 
+__global__ void denoiseKernelCopy(const uint32_t *in, uint32_t *out, int w) {
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	int k = x * w + y;
+	out[k] = in[k];
+}
+
 __global__ void denoiseKernelTemporalAvg(
 		uint32_t **backlogs, uint32_t *out, int w) {
 	int k = (blockDim.x * blockIdx.x + threadIdx.x) * w +
@@ -540,6 +547,7 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 	case SPATIAL:
 	case SPATIAL_KNN:
 	case SOBEL:
+	case COPY:
 		uint32_t *din;
 		cudaMalloc(&din, size);
 		cudaMemcpy(din, in, size, cudaMemcpyHostToDevice);
@@ -573,10 +581,11 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 					din, dout, h, w);
 			break;
 		case SOBEL:
-			double *dsobel = 0;
 			denoiseKernelSobel<<<gridDim, blockDim>>>(
-					din, frame, dsobel, dout, h, w);
+					din, frame, 0, dout, h, w);
 			break;
+		case COPY:
+			denoiseKernelCopy<<<gridDim, blockDim>>>(din, dout, w);
 		}
 		cudaFree(din);
 		break;

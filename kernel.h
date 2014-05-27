@@ -14,6 +14,7 @@ enum {
 	DIFF,
 	SOBEL,
 	MOTION,
+	COPY,
 
 	NFILTERS,
 };

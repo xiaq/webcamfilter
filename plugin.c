@@ -95,6 +95,7 @@ static void gst_webcam_filter_class_init(GstWebcamFilterClass *klass) {
 		DIFF, "diff", "diff",
 		SOBEL, "sobel", "sobel",
 		MOTION, "motion", "motion",
+		COPY, "copy", "copy",
 		0, 0, 0,
 	};
 	GType method_type = g_enum_register_static(
