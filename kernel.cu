@@ -34,7 +34,7 @@ typedef struct {
 	bool **dmotions;
 } KernelContext;
 
-__device__ uint32_t lum(uint32_t u) {
+__device__ __host__ uint32_t lum(uint32_t u) {
 	int r = u & 0xff,
 		g = (u >> 8) & 0xff,
 		b = (u >> 16) & 0xff;
@@ -50,7 +50,7 @@ __device__ inline static double distance(int32_t u, int32_t v) {
 	return sqrt(double(r * r + g * g + b * b));
 }
 */
-__device__ inline static uint32_t distance(int32_t u, int32_t v) {
+__device__ __host__ inline static uint32_t distance(int32_t u, int32_t v) {
 	return abs(int(lum(u)) - int(lum(v)));
 }
 
@@ -115,8 +115,8 @@ __global__ static void updateDiff(
 #define in(i, j) in[(i)*w + (j)]
 #define out(i, j) out[(i)*w + (j)]
 #define FOR_WINDOW(i2, j2, i, j, h, w, wd) \
-	for (i2 = max(0, i - wd); min(h, i2 < i + wd); i2++) \
-		for (j2 = max(0, j - wd); min(w, j2 < j + wd); j2++)
+	for (i2 = max(0, i - wd); i2 < min(h, i + wd); i2++) \
+		for (j2 = max(0, j - wd); j2 < min(w, j + wd); j2++)
 
 __global__ static void updateMotion(
 		bool *m, uint32_t *d, int h, int w) {
@@ -545,6 +545,26 @@ void denoise(void *p, int m, const uint32_t *in, uint32_t *out, int h, int w) {
 		cudaMemcpy(din, in, size, cudaMemcpyHostToDevice);
 		switch (m) {
 		case SPATIAL:
+			/*
+			int i, j;
+			for (i = 0; i < h; i++) {
+				for (j = 0; j < w; j++) {
+					int k = i * w + j;
+					double dmin = INFINITY;
+					int i2, j2, i3, j3;
+					FOR_WINDOW(i2, j2, i, j, h, w, HALF_WINDOW) {
+						double d = 0;
+						FOR_WINDOW(i3, j3, i, j, h, w, HALF_WINDOW) {
+							d += distance(in(i2, j2), in(i3, j3));
+						}
+						if (dmin > d) {
+							dmin = d;
+							out[k] = in(i2, j2);
+						}
+					}
+				}
+			}
+			*/
 			denoiseKernelSpatial<<<gridDim, blockDim>>>(
 					din, dout, h, w);
 			break;
